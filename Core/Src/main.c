@@ -19,6 +19,11 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32f103xb.h"
+#include "stm32f1xx_hal_uart.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -33,9 +38,10 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define ENCODER_PULSES_PER_REV 2400.0f
+#define ENCODER_COUNTS_PER_REV 2048.0f
 #define LED_BLINK_INTERVAL_MS 100U
 #define ENCODER_ACTIVITY_TIMEOUT_MS 250U
+#define UART_PUBLISH_INTERVAL_MS 20U
 
 /* USER CODE END PD */
 
@@ -50,6 +56,8 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+char uart_buffer[64];
+uint32_t last_uart_publish_tick = 0;
 
 /* USER CODE END PV */
 
@@ -104,6 +112,7 @@ int main(void)
   uint32_t last_blink_tick = 0;
   uint32_t last_encoder_activity_tick = 0;
   HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+  last_uart_publish_tick = HAL_GetTick();
 
   /* USER CODE END 2 */
 
@@ -117,6 +126,27 @@ int main(void)
     uint32_t current_tick = HAL_GetTick();
 
     counter_value = __HAL_TIM_GET_COUNTER(&htim3);
+    float turns = ((float)counter_value) / ENCODER_COUNTS_PER_REV;
+    float wrapped_turns = turns - floorf(turns);
+    uint32_t wrapped_angle_cdeg = (uint32_t)(wrapped_turns * 36000.0f);
+
+    if ((current_tick - last_uart_publish_tick) >= UART_PUBLISH_INTERVAL_MS)
+    {
+      int tx_len = snprintf(uart_buffer,
+                            sizeof(uart_buffer),
+                            "%lu,%d,%lu.%02lu\r\n",
+                            (unsigned long)current_tick,
+                            counter_value,
+                            (unsigned long)(wrapped_angle_cdeg / 100U),
+                            (unsigned long)(wrapped_angle_cdeg % 100U));
+
+      if (tx_len > 0)
+      {
+        HAL_UART_Transmit(&huart2, (uint8_t*)uart_buffer, (uint16_t)tx_len, 20);
+      }
+      last_uart_publish_tick = current_tick;
+    }
+
     if (counter_value != past_counter_value)
     {
       last_encoder_activity_tick = current_tick;

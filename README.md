@@ -1,80 +1,66 @@
-# Encoder Demo
+# Encoder Demo (STM32)
 
-This project is an STM32 encoder test built from STM32CubeMX-generated sources and compiled with CMake.
+Small beginner-friendly project to read an encoder with STM32, compute shaft angle, and send values to a serial monitor.
 
-The current firmware reads a quadrature encoder using `TIM3` in encoder mode and blinks the onboard LED when encoder movement is detected. The LED keeps blinking briefly after the last detected count change and then turns off when the encoder stops.
+## What This Firmware Does
 
-## Current Progress
+- Reads encoder counts with TIM3 in encoder mode.
+- Calculates wrapped angle (0 to 359.99 degrees).
+- Sends serial telemetry on USART2 every 20 ms.
+- Blinks onboard LED when encoder movement is detected.
 
-What is already working:
+Current angle scaling:
 
-- The project builds successfully with the existing CMake setup.
-- `TIM3` is configured and started in encoder mode.
-- The main loop polls the encoder counter using `__HAL_TIM_GET_COUNTER(&htim3)`.
-- `USART2` is initialized and available for future debug output.
-- The onboard LED (`LD2`) blinks when encoder counts change.
-- A `.gitignore` file is in place to avoid committing build outputs and local IDE files.
+- Encoder counts per revolution (CPR): 2048
 
-Current LED behavior:
+## Quick Start
 
-- Blink interval: `100 ms`
-- Encoder activity timeout: `250 ms`
-- If the encoder moves, the LED starts blinking.
-- If the encoder stops, the LED is forced off after the timeout expires.
-
-## Project Structure
-
-- `Core/`: application code and startup logic
-- `Drivers/`: STM32 HAL and CMSIS drivers
-- `cmake/`: toolchain and CubeMX CMake integration
-- `encoder_demo.ioc`: STM32CubeMX configuration file
-- `CMakeLists.txt`: root build configuration
-- `CMakePresets.json`: Debug and Release presets
-
-## Build
-
-This project uses CMake presets and Ninja.
-
-Available presets:
-
-- `Debug`
-- `Release`
-
-Typical configure/build flow:
+1. Build
 
 ```powershell
 cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-The generated build output is placed under `build/Debug/`.
+2. Flash the generated ELF to your board.
 
-## Firmware Behavior
+3. Open serial monitor with:
 
-The current logic in `main.c` is intentionally simple:
+- Baud: 115200
+- Data bits: 8
+- Stop bits: 1
+- Parity: None
+- Flow control: None
 
-1. Start `TIM3` in encoder mode.
-2. Read the counter continuously in the main loop.
-3. Compare the current count with the previous count.
-4. If the count changed, record the current tick as recent encoder activity.
-5. Blink `LD2` while encoder activity is still considered recent.
+## Serial Output Format
 
-This is useful as a first hardware validation step because it confirms all of the following with minimal code:
+Each line is CSV:
 
-- timer setup is valid
-- encoder channels are being read
-- the main loop is alive
-- the LED GPIO is working
+```text
+time_ms,count,angle_deg
+```
 
-## Notes
+Example:
 
-- The current implementation is polling-based, not interrupt-based.
-- The project already includes `USART2`, so serial angle or count reporting can be added next if needed.
-- If the board LED does not match `LD2`, update the LED pin mapping in the CubeMX configuration or generated headers.
+```text
+237120,402,70.66
+```
 
-## Good Next Steps
+## How To Check It Works
 
-1. Print encoder count and computed angle over `USART2` for easier debugging.
-2. Handle counter rollover if continuous multi-turn tracking is needed.
-3. Move from simple polling to a cleaner event or periodic sampling approach.
-4. Document wiring for the encoder channels and target board.
+1. Rotate the shaft slowly.
+2. `count` should increase or decrease.
+3. `angle_deg` should move smoothly and wrap near 360 back to 0.
+4. LED should blink while moving and turn off shortly after stopping.
+
+## Most Important Files
+
+- `Core/Src/main.c`: encoder read, angle math, UART telemetry, LED activity logic.
+- `encoder_demo.ioc`: CubeMX hardware configuration.
+- `CMakePresets.json`: build presets.
+
+## If Values Look Wrong
+
+- First verify your CPR value.
+- If one full turn is not close to 360 degrees, update the CPR constant in `main.c`.
+- If serial text is garbled, verify baud rate is 115200.
