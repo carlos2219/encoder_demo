@@ -1,0 +1,35 @@
+build/
+cmake-build-*/
+
+# STM32CubeMX scratch data
+mx.scratch
+
+# Generated IDE metadata
+.vscode/
+.idea/
+
+# CMake and Ninja artifacts
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+build.ninja
+.ninja_deps
+.ninja_log
+
+# Toolchain and flash/debug outputs
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# Keep shared project settings if you use them intentionally
+!.settings
