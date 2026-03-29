@@ -43,6 +43,37 @@ Pin map (from CubeMX-generated MSP and headers):
 - UART TX/RX: PA2 / PA3 (USART2)
 - Onboard LED (LD2): PA5
 
+## Wiring Diagram (Quick Reference)
+
+Use this as a practical wiring map for a typical dual-input H-bridge driver and quadrature encoder.
+
+STM32F103                     Motor Driver / Encoder / USB-UART
+-----------------------------------------------------------------
+PA1  (TIM2_CH2 PWM) --------> ENA / PWM input
+PA8  (DO_IN3)      ---------> IN3 (direction)
+PB10 (DO_IN4)      ---------> IN4 (direction)
+GND                ---------> Driver GND
+
+PA6  (TIM3_CH1)    <--------- Encoder A
+PA7  (TIM3_CH2)    <--------- Encoder B
+3V3 or 5V*         ---------> Encoder VCC
+GND                ---------> Encoder GND
+
+PA2  (USART2_TX)   ---------> USB-UART RX
+PA3  (USART2_RX)   <--------- USB-UART TX
+GND                ---------> USB-UART GND
+
+Motor supply (+Vm) ---------> Driver motor supply input
+Motor terminals     <-------> Driver motor outputs
+
+* Use the voltage level required by your encoder output stage.
+
+Notes:
+
+- Keep MCU ground, motor driver ground, and USB-UART ground common.
+- Do not power the motor directly from the STM32 board 5V/3V3 rail.
+- If encoder outputs are open-collector, add pull-up resistors to a valid logic rail.
+
 ## Build
 
 ```powershell
