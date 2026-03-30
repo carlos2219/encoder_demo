@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "PID.h"
 #include "stm32f103xb.h"
 #include "stm32f1xx_hal_uart.h"
 #include <stdint.h>
@@ -41,14 +42,12 @@
 
 #define ENCODER_COUNTS_PER_REV 2048.0f
 #define UART_PUBLISH_INTERVAL_MS 20U
+#define PID_SAMPLE_TIME_S 0.02f
+#define MOTOR_TARGET_RPM 120.0f
 
 /* Motor control constants */
 #define MOTOR_PWM_DUTY_MIN 0U
 #define MOTOR_PWM_DUTY_MAX 3199U
-#define MOTOR_PWM_DEMO_DUTY 1600U       /* ~50% duty cycle for demo */
-#define MOTOR_FORWARD_TIME_MS 2000U
-#define MOTOR_STOP_TIME_MS 1000U
-#define MOTOR_REVERSE_TIME_MS 2000U
 
 /* USER CODE END PD */
 
@@ -66,9 +65,7 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 char uart_buffer[64];
 uint32_t last_uart_publish_tick = 0;
-
-/* Motor demo state machine */
-static uint32_t motor_demo_phase_start_tick = 0;
+PIDController motor_pid;
 
 /* USER CODE END PV */
 
@@ -171,13 +168,27 @@ int main(void)
   uint16_t past_counter_value = 0;
   uint32_t last_rpm_sample_tick = 0;
   float motor_rpm = 0.0f;
+  float rpm_setpoint = MOTOR_TARGET_RPM;
+  float pid_output = 0.0f;
+  int32_t pwm_command = 0;
   HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
   __HAL_TIM_SET_COUNTER(&htim3, 0U);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+
+  PID_Init(&motor_pid);
+  motor_pid.Kp = 8.0f;
+  motor_pid.Ki = 4.0f;
+  motor_pid.Kd = 0.0f;
+  motor_pid.tau = 0.02f;
+  motor_pid.T = PID_SAMPLE_TIME_S;
+  motor_pid.limMin = -(float)MOTOR_PWM_DUTY_MAX;
+  motor_pid.limMax = (float)MOTOR_PWM_DUTY_MAX;
+  motor_pid.limMinInt = -(float)MOTOR_PWM_DUTY_MAX;
+  motor_pid.limMaxInt = (float)MOTOR_PWM_DUTY_MAX;
+
   motor_stop();
-  motor_demo_phase_start_tick = HAL_GetTick();
-  last_uart_publish_tick = motor_demo_phase_start_tick;
-  last_rpm_sample_tick = motor_demo_phase_start_tick;
+  last_uart_publish_tick = HAL_GetTick();
+  last_rpm_sample_tick = last_uart_publish_tick;
 
   /* USER CODE END 2 */
 
@@ -200,19 +211,36 @@ int main(void)
       uint32_t sample_elapsed_ms = current_tick - last_rpm_sample_tick;
 
       motor_rpm = encoder_compute_rpm(counter_value, past_counter_value, sample_elapsed_ms);
+      pid_output = PID_Compute(&motor_pid, rpm_setpoint, motor_rpm);
+      pwm_command = (int32_t)lroundf(pid_output);
+
+      if (pwm_command > 0)
+      {
+        motor_set_forward((uint16_t)pwm_command);
+      }
+      else if (pwm_command < 0)
+      {
+        motor_set_reverse((uint16_t)(-pwm_command));
+      }
+      else
+      {
+        motor_stop();
+      }
+
       int32_t motor_rpm_centi = (int32_t)lroundf(motor_rpm * 100.0f);
       uint32_t motor_rpm_abs_centi = (uint32_t)abs(motor_rpm_centi);
 
       int tx_len = snprintf(uart_buffer,
                             sizeof(uart_buffer),
-                            "%lu,%u,%lu.%02lu,%s%lu.%02lu\r\n",
+                            "%lu,%u,%lu.%02lu,%s%lu.%02lu,%ld\r\n",
                             (unsigned long)current_tick,
                             counter_value,
                             (unsigned long)(wrapped_angle_cdeg / 100U),
                             (unsigned long)(wrapped_angle_cdeg % 100U),
                             (motor_rpm_centi < 0) ? "-" : "",
                             (unsigned long)(motor_rpm_abs_centi / 100U),
-                            (unsigned long)(motor_rpm_abs_centi % 100U));
+                            (unsigned long)(motor_rpm_abs_centi % 100U),
+                            (long)pwm_command);
 
       if (tx_len > 0)
       {
@@ -221,30 +249,6 @@ int main(void)
       last_uart_publish_tick = current_tick;
       last_rpm_sample_tick = current_tick;
       past_counter_value = counter_value;
-    }
-
-    /* Motor demo state machine: forward -> stop -> reverse -> stop cycle */
-    uint32_t phase_elapsed = current_tick - motor_demo_phase_start_tick;
-
-    if (phase_elapsed < MOTOR_FORWARD_TIME_MS)
-    {
-      motor_set_forward(MOTOR_PWM_DEMO_DUTY);
-    }
-    else if (phase_elapsed < (MOTOR_FORWARD_TIME_MS + MOTOR_STOP_TIME_MS))
-    {
-      motor_stop();
-    }
-    else if (phase_elapsed < (MOTOR_FORWARD_TIME_MS + MOTOR_STOP_TIME_MS + MOTOR_REVERSE_TIME_MS))
-    {
-      motor_set_reverse(MOTOR_PWM_DEMO_DUTY);
-    }
-    else if (phase_elapsed < (MOTOR_FORWARD_TIME_MS + MOTOR_STOP_TIME_MS + MOTOR_REVERSE_TIME_MS + MOTOR_STOP_TIME_MS))
-    {
-      motor_stop();
-    }
-    else
-    {
-      motor_demo_phase_start_tick = current_tick;
     }
 
   }

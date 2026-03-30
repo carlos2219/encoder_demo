@@ -11,7 +11,7 @@ void PID_Init(PIDController *pid) {
 	pid->out = 0.0f;
 }
 
-float PID_Compute(PIDController *pid, float setpoint, float measurement, float dt) {
+float PID_Compute(PIDController *pid, float setpoint, float measurement) {
 /*
 	* Error signal
 	*/
