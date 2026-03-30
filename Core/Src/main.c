@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -199,15 +200,19 @@ int main(void)
       uint32_t sample_elapsed_ms = current_tick - last_rpm_sample_tick;
 
       motor_rpm = encoder_compute_rpm(counter_value, past_counter_value, sample_elapsed_ms);
+      int32_t motor_rpm_centi = (int32_t)lroundf(motor_rpm * 100.0f);
+      uint32_t motor_rpm_abs_centi = (uint32_t)abs(motor_rpm_centi);
 
       int tx_len = snprintf(uart_buffer,
                             sizeof(uart_buffer),
-                            "%lu,%u,%lu.%02lu,%.2f\r\n",
+                            "%lu,%u,%lu.%02lu,%s%lu.%02lu\r\n",
                             (unsigned long)current_tick,
                             counter_value,
                             (unsigned long)(wrapped_angle_cdeg / 100U),
                             (unsigned long)(wrapped_angle_cdeg % 100U),
-                            (double)motor_rpm);
+                            (motor_rpm_centi < 0) ? "-" : "",
+                            (unsigned long)(motor_rpm_abs_centi / 100U),
+                            (unsigned long)(motor_rpm_abs_centi % 100U));
 
       if (tx_len > 0)
       {
