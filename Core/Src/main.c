@@ -39,8 +39,6 @@
 /* USER CODE BEGIN PD */
 
 #define ENCODER_COUNTS_PER_REV 2048.0f
-#define LED_BLINK_INTERVAL_MS 100U
-#define ENCODER_ACTIVITY_TIMEOUT_MS 250U
 #define UART_PUBLISH_INTERVAL_MS 20U
 
 /* Motor control constants */
@@ -85,6 +83,21 @@ static void MX_TIM2_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+static float encoder_compute_rpm(uint16_t current_count,
+                                 uint16_t previous_count,
+                                 uint32_t elapsed_ms)
+{
+  if (elapsed_ms == 0U)
+  {
+    return 0.0f;
+  }
+
+  int16_t count_delta = (int16_t)(current_count - previous_count);
+  float elapsed_minutes = ((float)elapsed_ms) / 60000.0f;
+
+  return ((float)count_delta / ENCODER_COUNTS_PER_REV) / elapsed_minutes;
+}
 
 /**
   * @brief Set motor to forward direction and apply PWM duty
@@ -153,15 +166,17 @@ int main(void)
   MX_USART2_UART_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-  int counter_value = 0;
-  int past_counter_value = 0;
-  uint32_t last_blink_tick = 0;
-  uint32_t last_encoder_activity_tick = 0;
+  uint16_t counter_value = 0;
+  uint16_t past_counter_value = 0;
+  uint32_t last_rpm_sample_tick = 0;
+  float motor_rpm = 0.0f;
   HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+  __HAL_TIM_SET_COUNTER(&htim3, 0U);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
   motor_stop();
   motor_demo_phase_start_tick = HAL_GetTick();
   last_uart_publish_tick = motor_demo_phase_start_tick;
+  last_rpm_sample_tick = motor_demo_phase_start_tick;
 
   /* USER CODE END 2 */
 
@@ -181,37 +196,26 @@ int main(void)
 
     if ((current_tick - last_uart_publish_tick) >= UART_PUBLISH_INTERVAL_MS)
     {
+      uint32_t sample_elapsed_ms = current_tick - last_rpm_sample_tick;
+
+      motor_rpm = encoder_compute_rpm(counter_value, past_counter_value, sample_elapsed_ms);
+
       int tx_len = snprintf(uart_buffer,
                             sizeof(uart_buffer),
-                            "%lu,%d,%lu.%02lu\r\n",
+                            "%lu,%u,%lu.%02lu,%.2f\r\n",
                             (unsigned long)current_tick,
                             counter_value,
                             (unsigned long)(wrapped_angle_cdeg / 100U),
-                            (unsigned long)(wrapped_angle_cdeg % 100U));
+                            (unsigned long)(wrapped_angle_cdeg % 100U),
+                            (double)motor_rpm);
 
       if (tx_len > 0)
       {
         HAL_UART_Transmit(&huart2, (uint8_t*)uart_buffer, (uint16_t)tx_len, 20);
       }
       last_uart_publish_tick = current_tick;
-    }
-
-    if (counter_value != past_counter_value)
-    {
-      last_encoder_activity_tick = current_tick;
-    }
-
-    if ((current_tick - last_encoder_activity_tick) < ENCODER_ACTIVITY_TIMEOUT_MS)
-    {
-      if ((current_tick - last_blink_tick) >= LED_BLINK_INTERVAL_MS)
-      {
-        HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-        last_blink_tick = current_tick;
-      }
-    }
-    else
-    {
-      HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+      last_rpm_sample_tick = current_tick;
+      past_counter_value = counter_value;
     }
 
     /* Motor demo state machine: forward -> stop -> reverse -> stop cycle */
@@ -238,7 +242,6 @@ int main(void)
       motor_demo_phase_start_tick = current_tick;
     }
 
-    past_counter_value = counter_value;
   }
   /* USER CODE END 3 */
 }

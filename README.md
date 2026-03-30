@@ -3,7 +3,7 @@
 This branch extends the encoder demo into a closed-loop-ready motor test project:
 
 - Reads a quadrature encoder using TIM3 in encoder mode.
-- Computes wrapped shaft angle from encoder count.
+- Computes wrapped shaft angle and signed motor RPM from encoder count.
 - Streams telemetry over USART2 at a fixed period.
 - Runs a repeating motor demo sequence (forward, stop, reverse, stop).
 - Blinks the onboard LED while encoder movement is detected.
@@ -99,13 +99,13 @@ Generated artifacts are placed under `build/Debug`.
 Each line is CSV:
 
 ```text
-time_ms,count,angle_deg
+time_ms,count,angle_deg,rpm
 ```
 
 Example:
 
 ```text
-237120,402,70.66
+237120,402,70.66,58.89
 ```
 
 Field meanings:
@@ -113,6 +113,7 @@ Field meanings:
 - `time_ms`: HAL tick in milliseconds
 - `count`: raw TIM3 counter value
 - `angle_deg`: wrapped angle in degrees (0.00 to 359.99)
+- `rpm`: signed shaft speed in revolutions per minute
 
 ## Quick Validation
 
