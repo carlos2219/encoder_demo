@@ -23,7 +23,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -44,7 +43,7 @@
 /* Motor control constants */
 #define MOTOR_PWM_DUTY_MIN 0U
 #define MOTOR_PWM_DUTY_MAX 3199U
-#define MOTOR_PWM_DEMO_DUTY 1600U       /* ~50% duty cycle for demo */
+#define MOTOR_PWM_DEMO_DUTY 3000U       /* ~50% duty cycle for demo */
 #define MOTOR_FORWARD_TIME_MS 2000U
 #define MOTOR_STOP_TIME_MS 1000U
 #define MOTOR_REVERSE_TIME_MS 2000U
@@ -190,9 +189,6 @@ int main(void)
     uint32_t current_tick = HAL_GetTick();
 
     counter_value = __HAL_TIM_GET_COUNTER(&htim3);
-    float turns = ((float)counter_value) / ENCODER_COUNTS_PER_REV;
-    float wrapped_turns = turns - floorf(turns);
-    uint32_t wrapped_angle_cdeg = (uint32_t)(wrapped_turns * 36000.0f);
 
     if ((current_tick - last_uart_publish_tick) >= UART_PUBLISH_INTERVAL_MS)
     {
@@ -200,14 +196,33 @@ int main(void)
 
       motor_rpm = encoder_compute_rpm(counter_value, past_counter_value, sample_elapsed_ms);
 
+      uint16_t raw_pwm = (uint16_t)__HAL_TIM_GET_COMPARE(&htim2, TIM_CHANNEL_2);
+
+      int8_t dir_sign = 0;
+      if (HAL_GPIO_ReadPin(DO_IN3_GPIO_Port, DO_IN3_Pin) == GPIO_PIN_SET)
+      {
+        dir_sign = 1;
+      }
+      else if (HAL_GPIO_ReadPin(DO_IN4_GPIO_Port, DO_IN4_Pin) == GPIO_PIN_SET)
+      {
+        dir_sign = -1;
+      }
+
+      float pwm_norm = (dir_sign == 0) ? 0.0f
+                       : ((float)raw_pwm / (float)MOTOR_PWM_DUTY_MAX) * (float)dir_sign;
+
+      const char *norm_sign = (pwm_norm < 0.0f) ? "-" : "";
+      float norm_abs = (pwm_norm < 0.0f) ? -pwm_norm : pwm_norm;
+      uint32_t norm_int = (uint32_t)norm_abs;
+      uint32_t norm_frac = (uint32_t)((norm_abs - (float)norm_int) * 1000.0f);
+
       int tx_len = snprintf(uart_buffer,
                             sizeof(uart_buffer),
-                            "%lu,%u,%lu.%02lu,%.2f\r\n",
-                            (unsigned long)current_tick,
-                            counter_value,
-                            (unsigned long)(wrapped_angle_cdeg / 100U),
-                            (unsigned long)(wrapped_angle_cdeg % 100U),
-                            (double)motor_rpm);
+                            "%d,%s%lu.%03lu\r\n",
+                            (int)motor_rpm,
+                            norm_sign,
+                            (unsigned long)norm_int,
+                            (unsigned long)norm_frac);
 
       if (tx_len > 0)
       {
