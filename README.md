@@ -58,12 +58,12 @@ Pin mapping:
 STM32F103                     Motor Driver / Encoder / USB-UART
 -----------------------------------------------------------------
 PA1  (TIM2_CH2 PWM) --------> ENA / PWM input
-PA8  (DO_IN3)      ---------> IN3 (direction)
-PB10 (DO_IN4)      ---------> IN4 (direction)
+PA8  (D7, DO_IN3)      ---------> IN3 (direction)
+PB10 (D6, DO_IN4)      ---------> IN4 (direction)
 GND                ---------> Driver GND
 
-PA6  (TIM3_CH1)    <--------- Encoder A
-PA7  (TIM3_CH2)    <--------- Encoder B
+PA6  (D12, TIM3_CH1)    <--------- Encoder A, yellow wire
+PA7  (D11, TIM3_CH2)    <--------- Encoder B, green wire
 3V3 or 5V*         ---------> Encoder VCC
 GND                ---------> Encoder GND
 

@@ -43,7 +43,7 @@
 #define ENCODER_COUNTS_PER_REV 2048.0f
 #define UART_PUBLISH_INTERVAL_MS 20U
 #define PID_SAMPLE_TIME_S 0.02f
-#define MOTOR_TARGET_RPM 120.0f
+#define MOTOR_TARGET_RPM 60.0f
 
 /* Motor control constants */
 #define MOTOR_PWM_DUTY_MIN 0U
@@ -176,8 +176,8 @@ int main(void)
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
 
   PID_Init(&motor_pid);
-  motor_pid.Kp = 8.0f;
-  motor_pid.Ki = 4.0f;
+  motor_pid.Kp = 1.0f;
+  motor_pid.Ki = 0.5f;
   motor_pid.Kd = 0.0f;
   motor_pid.tau = 0.02f;
   motor_pid.T = PID_SAMPLE_TIME_S;
