@@ -65,6 +65,10 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 char uart_buffer[64];
 uint32_t last_uart_publish_tick = 0;
+
+/* Step response timing */
+static uint32_t step_start_tick = 0;
+static uint8_t experiment_running = 0;
 PIDController motor_pid;
 
 /* USER CODE END PV */
@@ -103,30 +107,9 @@ static float encoder_compute_rpm(uint16_t current_count,
   */
 static void motor_set_forward(uint16_t duty)
 {
-  HAL_GPIO_WritePin(DO_IN3_GPIO_Port, DO_IN3_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(DO_IN4_GPIO_Port, DO_IN4_Pin, GPIO_PIN_RESET);
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, duty);
-}
-
-/**
-  * @brief Set motor to reverse direction and apply PWM duty
-  * @param duty: PWM duty cycle (0 to 3199)
-  */
-static void motor_set_reverse(uint16_t duty)
-{
   HAL_GPIO_WritePin(DO_IN3_GPIO_Port, DO_IN3_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(DO_IN4_GPIO_Port, DO_IN4_Pin, GPIO_PIN_SET);
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, duty);
-}
-
-/**
-  * @brief Stop motor (coast): both direction pins low, duty = 0
-  */
-static void motor_stop(void)
-{
-  HAL_GPIO_WritePin(DO_IN3_GPIO_Port, DO_IN3_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(DO_IN4_GPIO_Port, DO_IN4_Pin, GPIO_PIN_RESET);
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0U);
 }
 
 /* USER CODE END 0 */
@@ -174,21 +157,7 @@ int main(void)
   HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
   __HAL_TIM_SET_COUNTER(&htim3, 0U);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-
-  PID_Init(&motor_pid);
-  motor_pid.Kp = 1.0f;
-  motor_pid.Ki = 0.5f;
-  motor_pid.Kd = 0.0f;
-  motor_pid.tau = 0.02f;
-  motor_pid.T = PID_SAMPLE_TIME_S;
-  motor_pid.limMin = -(float)MOTOR_PWM_DUTY_MAX;
-  motor_pid.limMax = (float)MOTOR_PWM_DUTY_MAX;
-  motor_pid.limMinInt = -(float)MOTOR_PWM_DUTY_MAX;
-  motor_pid.limMaxInt = (float)MOTOR_PWM_DUTY_MAX;
-
-  motor_stop();
-  last_uart_publish_tick = HAL_GetTick();
-  last_rpm_sample_tick = last_uart_publish_tick;
+  /* Motor stays stopped — send 's' over UART to start the experiment */
 
   /* USER CODE END 2 */
 
@@ -201,55 +170,68 @@ int main(void)
     /* USER CODE BEGIN 3 */
     uint32_t current_tick = HAL_GetTick();
 
-    counter_value = __HAL_TIM_GET_COUNTER(&htim3);
-    float turns = ((float)counter_value) / ENCODER_COUNTS_PER_REV;
-    float wrapped_turns = turns - floorf(turns);
-    uint32_t wrapped_angle_cdeg = (uint32_t)(wrapped_turns * 36000.0f);
-
-    if ((current_tick - last_uart_publish_tick) >= UART_PUBLISH_INTERVAL_MS)
+    /* Check for start command: send 's' over UART to begin the experiment */
+    if (!experiment_running &&
+        __HAL_UART_GET_FLAG(&huart2, UART_FLAG_RXNE))
     {
-      uint32_t sample_elapsed_ms = current_tick - last_rpm_sample_tick;
-
-      motor_rpm = encoder_compute_rpm(counter_value, past_counter_value, sample_elapsed_ms);
-      pid_output = PID_Compute(&motor_pid, rpm_setpoint, motor_rpm);
-      pwm_command = (int32_t)lroundf(pid_output);
-
-      if (pwm_command > 0)
+      uint8_t rx_byte = (uint8_t)(huart2.Instance->DR & 0xFFU);
+      if (rx_byte == 's')
       {
-        motor_set_forward((uint16_t)pwm_command);
+        experiment_running = 1;
+        step_start_tick = current_tick;
+        last_uart_publish_tick = current_tick;
+        last_rpm_sample_tick = current_tick;
+        past_counter_value = __HAL_TIM_GET_COUNTER(&htim3);
+        motor_set_forward(MOTOR_PWM_DUTY_MIN);
       }
-      else if (pwm_command < 0)
-      {
-        motor_set_reverse((uint16_t)(-pwm_command));
-      }
-      else
-      {
-        motor_stop();
-      }
-
-      int32_t motor_rpm_centi = (int32_t)lroundf(motor_rpm * 100.0f);
-      uint32_t motor_rpm_abs_centi = (uint32_t)abs(motor_rpm_centi);
-
-      int tx_len = snprintf(uart_buffer,
-                            sizeof(uart_buffer),
-                            "%lu,%u,%lu.%02lu,%s%lu.%02lu,%ld\r\n",
-                            (unsigned long)current_tick,
-                            counter_value,
-                            (unsigned long)(wrapped_angle_cdeg / 100U),
-                            (unsigned long)(wrapped_angle_cdeg % 100U),
-                            (motor_rpm_centi < 0) ? "-" : "",
-                            (unsigned long)(motor_rpm_abs_centi / 100U),
-                            (unsigned long)(motor_rpm_abs_centi % 100U),
-                            (long)pwm_command);
-
-      if (tx_len > 0)
-      {
-        HAL_UART_Transmit(&huart2, (uint8_t*)uart_buffer, (uint16_t)tx_len, 20);
-      }
-      last_uart_publish_tick = current_tick;
-      last_rpm_sample_tick = current_tick;
-      past_counter_value = counter_value;
     }
+
+    if (experiment_running)
+    {
+      counter_value = __HAL_TIM_GET_COUNTER(&htim3);
+
+      if ((current_tick - last_uart_publish_tick) >= UART_PUBLISH_INTERVAL_MS)
+      {
+        uint32_t sample_elapsed_ms = current_tick - last_rpm_sample_tick;
+
+        motor_rpm = encoder_compute_rpm(counter_value, past_counter_value, sample_elapsed_ms);
+
+        uint16_t raw_pwm = (uint16_t)__HAL_TIM_GET_COMPARE(&htim2, TIM_CHANNEL_2);
+
+        int8_t dir_sign = 0;
+        if (HAL_GPIO_ReadPin(DO_IN4_GPIO_Port, DO_IN4_Pin) == GPIO_PIN_SET)
+        {
+          dir_sign = 1;
+        }
+        else if (HAL_GPIO_ReadPin(DO_IN3_GPIO_Port, DO_IN3_Pin) == GPIO_PIN_SET)
+        {
+          dir_sign = -1;
+        }
+
+        float pwm_norm = (dir_sign == 0) ? 0.0f
+                         : ((float)raw_pwm / (float)MOTOR_PWM_DUTY_MAX) * (float)dir_sign;
+
+        const char *norm_sign = (pwm_norm < 0.0f) ? "-" : "";
+        float norm_abs = (pwm_norm < 0.0f) ? -pwm_norm : pwm_norm;
+        uint32_t norm_int = (uint32_t)norm_abs;
+        uint32_t norm_frac = (uint32_t)((norm_abs - (float)norm_int) * 1000.0f);
+
+        int tx_len = snprintf(uart_buffer,
+                              sizeof(uart_buffer),
+                              "%d,%s%lu.%03lu\r\n",
+                              (int)motor_rpm,
+                              norm_sign,
+                              (unsigned long)norm_int,
+                              (unsigned long)norm_frac);
+
+        if (tx_len > 0)
+        {
+          HAL_UART_Transmit(&huart2, (uint8_t*)uart_buffer, (uint16_t)tx_len, 20);
+        }
+        last_uart_publish_tick = current_tick;
+        last_rpm_sample_tick = current_tick;
+        past_counter_value = counter_value;
+      }
 
   }
   /* USER CODE END 3 */
