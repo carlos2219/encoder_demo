@@ -2,6 +2,8 @@
 
 This project turns a basic encoder readout into a closed-loop motor-control testbed for STM32F103.
 
+**Current scope:** closed-loop **velocity control**. Position control is planned as a future extension.
+
 It currently includes:
 
 - Quadrature encoder capture on TIM3 (encoder mode)
@@ -50,6 +52,14 @@ Once armed, the firmware publishes a CSV line every 20 ms:
 ```
 
 `pwm_normalized` is in the range `[-1.000, 1.000]` (sign reflects direction pin state).
+
+### Plant Model
+
+The motor was identified as a first-order system with normalized PWM input (`[-1, 1]`) and shaft speed (RPM) as output:
+
+$$G(s) = \frac{K_p}{1 + T_{p1} \cdot s} \qquad K_p = 131.15, \quad T_{p1} = 0.10094 \text{ s}$$
+
+This model was used to inform the PID gains. The firmware uses **raw PWM counts** as the controller output (range 0 – 3199), so the gains in the table below are scaled accordingly (see the note under the table).
 
 ### PID Tuning Constants
 
