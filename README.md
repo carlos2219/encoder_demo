@@ -123,6 +123,8 @@ Pin mapping:
 
 > \* Use the voltage level required by your encoder output stage.
 
+> **Note:** If the encoder signal lines are long or run near noisy motor wiring, switching noise can inject spurious counts. In that case, a simple RC low-pass filter on each channel (e.g. 1 kΩ + 10 nF, cutting off above ~16 kHz) before the MCU input pins helps suppress glitches. TIM3 also has a configurable input capture filter (`IC1Filter`/`IC2Filter` in `MX_TIM3_Init`) that can be increased if noise is observed at the firmware level.
+
 ### USB-UART Adapter
 
 | STM32F103 Pin | Direction | USB-UART Pin |
