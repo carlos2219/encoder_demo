@@ -1,36 +1,62 @@
 # Encoder + Motor Demo (STM32F103)
 
-This project turns a basic encoder readout into a motor-control testbed for STM32F103.
+This project turns a basic encoder readout into a closed-loop motor-control testbed for STM32F103.
 
 It currently includes:
 
 - Quadrature encoder capture on TIM3 (encoder mode)
-- Shaft angle wrapping and signed RPM estimation
-- Periodic telemetry over USART2 (CSV)
-- Automatic motor sequence (forward, stop, reverse, stop)
-- Activity LED indication while motion is detected
+- Signed RPM estimation from encoder count delta
+- PID velocity controller (anti-windup, derivative low-pass filter)
+- UART command interface to arm the experiment and set RPM setpoints
+- Periodic telemetry over USART2 (CSV: `rpm,setpoint,pwm_normalized`)
 
 ## Project Layout
 
-- `Core/Src/main.c`: application behavior and state machine
+- `Core/Src/main.c`: application loop, PID integration, UART command parser, telemetry
 - `Core/Inc/main.h`: pin aliases and board-level definitions
+- `Core/Src/PID.c` / `Core/Inc/PID.h`: reusable PID controller module
 - `Core/Src/stm32f1xx_hal_msp.c`: GPIO/timer/UART low-level setup
 - `encoder_demo.ioc`: CubeMX configuration source
 - `cmake/stm32cubemx/CMakeLists.txt`: generated source integration
 
 ## Firmware Behavior
 
-Default timing values:
+### UART Command Interface
 
-- Telemetry publish period: 20 ms
-- Encoder activity timeout (LED off): 250 ms
-- LED blink period while active: 100 ms
-- Demo sequence:
-	- Forward: 2000 ms
-	- Stop: 1000 ms
-	- Reverse: 2000 ms
-	- Stop: 1000 ms
-	- Repeat
+Send commands over USART2 (newline-terminated):
+
+| Command | Effect |
+|---------|--------|
+| `s` | Arm the experiment — resets PID state, clears setpoint, starts telemetry |
+| `<integer>` | Set the RPM target (e.g. `120` sets 120 RPM forward) |
+
+**Note:** The motor only spins in the forward direction. A setpoint of `0` stops the motor.
+
+### Telemetry
+
+Once armed, the firmware publishes a CSV line every 20 ms:
+
+```
+<measured_rpm>,<setpoint_rpm>,<pwm_normalized>
+```
+
+`pwm_normalized` is in the range `[-1.000, 1.000]` (sign reflects direction pin state).
+
+### PID Tuning Constants
+
+Declared near the top of `Core/Src/main.c`:
+
+| Constant | Default | Notes |
+|----------|---------|-------|
+| `PID_KP` | 8.0 | Proportional gain |
+| `PID_KI` | 40.0 | Integral gain |
+| `PID_KD` | 0.0 | Derivative gain |
+| `PID_TAU` | 0.020 s | Derivative filter time constant |
+| `PID_SAMPLE_TIME_S` | 0.020 s | Controller sample period |
+| `UART_PUBLISH_INTERVAL_MS` | 20 ms | Telemetry publish period |
+| `ENCODER_COUNTS_PER_REV` | 2048 | Encoder PPR (quadrature counts) |
+
+> **Important:** The gains above are tuned for the **raw PWM output range (0 – 3199)**. If you redesign the controller with a normalized output in `[0, 1]`, scale the gains accordingly — for reference, the equivalent normalized values for this motor are approximately `Kp_norm ≈ 0.004` and `Ki_norm ≈ 0.040`.
 
 Main tunable constants are declared near the top of `Core/Src/main.c`.
 

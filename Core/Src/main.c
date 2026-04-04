@@ -47,9 +47,10 @@
 
 /* PID tuning — adjust Kp/Ki/Kd to taste */
 #define PID_SAMPLE_TIME_S   0.020f
-#define PID_KP              8.0f // 8 works well for this motor/encoder, but feel free to experiment with the values!
-#define PID_KI               40.0f
-#define PID_KD               0.0f
+/* Gains are for raw PWM output (0 – 3199). Equivalent normalized [0,1] gains: Kp_norm≈0.004, Ki_norm≈0.040, Kd_norm≈0.000 */
+#define PID_KP              8.0f  //MOTOR_PWM_DUTY_MAX*kp_norm
+#define PID_KI              40.0f  //MOTOR_PWM_DUTY_MAX*ki_norm
+#define PID_KD              0.0f  //MOTOR_PWM_DUTY_MAX*kd_norm
 #define PID_TAU              0.020f
 
 /* USER CODE END PD */
