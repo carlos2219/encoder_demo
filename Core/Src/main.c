@@ -117,6 +117,17 @@ static void motor_set_forward(uint16_t duty)
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, duty);
 }
 
+/**
+  * @brief Set motor to reverse direction and apply PWM duty
+  * @param duty: PWM duty cycle (0 to 3199)
+  */
+static void motor_set_reverse(uint16_t duty)
+{
+  HAL_GPIO_WritePin(DO_IN4_GPIO_Port, DO_IN4_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(DO_IN3_GPIO_Port, DO_IN3_Pin, GPIO_PIN_SET);
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, duty);
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -165,7 +176,7 @@ int main(void)
   motor_pid.Kd = PID_KD;
   motor_pid.tau = PID_TAU;
   motor_pid.T = PID_SAMPLE_TIME_S;
-  motor_pid.limMin = 0.0f;
+  motor_pid.limMin = -1.0f;
   motor_pid.limMax = 1.0f;
   motor_pid.limMinInt = -1.0f;
   motor_pid.limMaxInt = 1.0f;
@@ -184,8 +195,9 @@ int main(void)
     uint32_t current_tick = HAL_GetTick();
 
     /* UART RX: buffer chars until newline, then parse command.
-     * 's'  — arm the experiment (motor off, setpoint = 0)
-     * '0'..'9' string — update RPM setpoint (e.g. "120\n")
+     * 's'       — arm the experiment (motor off, setpoint = 0)
+     * '0'..'9'  — update RPM setpoint forward (e.g. "120\n")
+     * '-' + digits — set negative RPM setpoint for reverse (e.g. "-120\n")
      */
     if (__HAL_UART_GET_FLAG(&huart2, UART_FLAG_RXNE))
     {
@@ -207,14 +219,21 @@ int main(void)
           else
           {
             int32_t val = 0;
-            for (uint8_t i = 0U; i < rx_idx; i++)
+            uint8_t start = 0U;
+            int8_t sign = 1;
+            if (rx_buf[0] == '-')
+            {
+              sign = -1;
+              start = 1U;
+            }
+            for (uint8_t i = start; i < rx_idx; i++)
             {
               if (rx_buf[i] >= '0' && rx_buf[i] <= '9')
               {
                 val = val * 10 + (int32_t)(rx_buf[i] - '0');
               }
             }
-            rpm_setpoint = (float)val;
+            rpm_setpoint = (float)(sign * val);
           }
           rx_idx = 0U;
         }
@@ -274,17 +293,22 @@ int main(void)
 
         /* PID velocity control — compute normalized output then scale to timer counts */
         float u_norm = PID_Compute(&motor_pid, rpm_setpoint, motor_rpm);
-        uint16_t pwm_command = (uint16_t)(u_norm * (float)MOTOR_PWM_DUTY_MAX);
+        float u_abs = (u_norm < 0.0f) ? -u_norm : u_norm;
+        uint16_t pwm_command = (uint16_t)(u_abs * (float)MOTOR_PWM_DUTY_MAX);
 
-        if (rpm_setpoint <= 0.0f)
+        if (rpm_setpoint == 0.0f)
         {
           HAL_GPIO_WritePin(DO_IN3_GPIO_Port, DO_IN3_Pin, GPIO_PIN_RESET);
           HAL_GPIO_WritePin(DO_IN4_GPIO_Port, DO_IN4_Pin, GPIO_PIN_RESET);
           __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0U);
         }
-        else
+        else if (u_norm >= 0.0f)
         {
           motor_set_forward(pwm_command);
+        }
+        else
+        {
+          motor_set_reverse(pwm_command);
         }
       }
     }
