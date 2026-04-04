@@ -17,7 +17,7 @@ It currently includes:
 | MCU board | STM32F103 (Nucleo-F103RB or compatible) |
 | Motor | [GM 25-370 — 12 V DC, 140 RPM, with quadrature encoder](https://uelectronics.com/producto/gm-25-370-motor-con-encoder-12v-dc-140rpm-330rpm/) |
 | Motor driver | L298N or compatible H-bridge |
-| USB cable (ST-link)
+| USB cable | (ST-link) |
 
 ## Project Layout
 
