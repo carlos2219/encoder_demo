@@ -10,6 +10,15 @@ It currently includes:
 - UART command interface to arm the experiment and set RPM setpoints
 - Periodic telemetry over USART2 (CSV: `rpm,setpoint,pwm_normalized`)
 
+## Hardware
+
+| Component | Model / Details |
+|-----------|-----------------|
+| MCU board | STM32F103 (Nucleo-F103RB or compatible) |
+| Motor | [GM 25-370 — 12 V DC, 140 RPM, with quadrature encoder](https://uelectronics.com/producto/gm-25-370-motor-con-encoder-12v-dc-140rpm-330rpm/) |
+| Motor driver | L298N or compatible H-bridge |
+| USB cable (ST-link)
+
 ## Project Layout
 
 - `Core/Src/main.c`: application loop, PID integration, UART command parser, telemetry
@@ -56,7 +65,7 @@ Declared near the top of `Core/Src/main.c`:
 | `UART_PUBLISH_INTERVAL_MS` | 20 ms | Telemetry publish period |
 | `ENCODER_COUNTS_PER_REV` | 2048 | Encoder PPR (quadrature counts) |
 
-> **Important:** The gains above are tuned for the **raw PWM output range (0 – 3199)**. If you redesign the controller with a normalized output in `[0, 1]`, scale the gains accordingly — for reference, the equivalent normalized values for this motor are approximately `Kp_norm ≈ 0.004` and `Ki_norm ≈ 0.040`.
+> **Important:** The gains above are tuned for the **raw PWM output range (0 – 3199)**. If you redesign the controller with a normalized output in `[0, 1]`, scale the gains accordingly — for reference, the equivalent normalized values for this motor are approximately `Kp_norm ≈ 0.004` and `Ki_norm ≈ 0.040`. //KP = MOTOR_PWM_DUTY_MAX*Kp_norm, KI = MOTOR_PWM_DUTY_MAX*Ki_norm 
 
 Main tunable constants are declared near the top of `Core/Src/main.c`.
 
@@ -81,28 +90,37 @@ Pin mapping:
 
 ## Wiring (Quick Reference)
 
-STM32F103                     Motor Driver / Encoder / USB-UART
------------------------------------------------------------------
-PA1  (TIM2_CH2 PWM) --------> ENA / PWM input
-PA8  (D7, DO_IN3)      ---------> IN3 (direction)
-PB10 (D6, DO_IN4)      ---------> IN4 (direction)
-GND                ---------> Driver GND
+### Motor Driver
 
-PA6  (D12, TIM3_CH1)    <--------- Encoder A, yellow wire
-PA7  (D11, TIM3_CH2)    <--------- Encoder B, green wire
-3V3 or 5V*         ---------> Encoder VCC
-GND                ---------> Encoder GND
+| STM32F103 Pin | Direction | Motor Driver Pin |
+|---|:---:|---|
+| PA1 — TIM2_CH2 (PWM) | → | ENA / PWM input |
+| PA8 — D7 (DO_IN3) | → | IN3 (direction) |
+| PB10 — D6 (DO_IN4) | → | IN4 (direction) |
+| GND | → | Driver GND |
+| Motor supply (+Vm) | → | Driver motor supply |
+| Motor terminals | ↔ | Driver motor outputs |
 
-PA2  (USART2_TX)   ---------> USB-UART RX
-PA3  (USART2_RX)   <--------- USB-UART TX
-GND                ---------> USB-UART GND
+### Encoder
 
-Motor supply (+Vm) ---------> Driver motor supply
-Motor terminals     <-------> Driver motor outputs
+| STM32F103 Pin | Direction | Encoder Wire |
+|---|:---:|---|
+| PA6 — D12 (TIM3_CH1) | ← | Channel A (yellow) |
+| PA7 — D11 (TIM3_CH2) | ← | Channel B (green) |
+| 3V3 or 5V* | → | Encoder VCC |
+| GND | → | Encoder GND |
 
-* Use the level required by your encoder output stage.
+> \* Use the voltage level required by your encoder output stage.
 
-Important:
+### USB-UART Adapter
+
+| STM32F103 Pin | Direction | USB-UART Pin |
+|---|:---:|---|
+| PA2 — USART2_TX | → | RX |
+| PA3 — USART2_RX | ← | TX |
+| GND | → | GND |
+
+### Important Notes
 
 - Share ground between MCU, motor driver, and USB-UART adapter.
 - Do not power the motor from the STM32 board rail.
