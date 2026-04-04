@@ -41,12 +41,13 @@
 #define UART_PUBLISH_INTERVAL_MS 20U
 
 /* Motor control constants */
-#define MOTOR_PWM_DUTY_MIN 0U
-#define MOTOR_PWM_DUTY_MAX 3199U
-#define MOTOR_PWM_DEMO_DUTY 3000U       /* ~50% duty cycle for demo */
-#define MOTOR_FORWARD_TIME_MS 2000U
-#define MOTOR_STOP_TIME_MS 1000U
-#define MOTOR_REVERSE_TIME_MS 2000U
+#define MOTOR_PWM_DUTY_MIN  0U
+#define MOTOR_PWM_DUTY_MAX  3199U
+#define MOTOR_PWM_100PCT    3199U   /* 100% duty */
+#define MOTOR_PWM_60PCT     1919U   /* 60% duty */
+#define MOTOR_PHASE1_MS     1000U   /* 1 s at 0% */
+#define MOTOR_PHASE2_MS     1000U   /* 1 s at 100% */
+#define MOTOR_PHASE3_MS     2000U   /* 2 s at 60% */
 
 /* USER CODE END PD */
 
@@ -65,8 +66,9 @@ UART_HandleTypeDef huart2;
 char uart_buffer[64];
 uint32_t last_uart_publish_tick = 0;
 
-/* Motor demo state machine */
-static uint32_t motor_demo_phase_start_tick = 0;
+/* Step response timing */
+static uint32_t step_start_tick = 0;
+static uint8_t experiment_running = 0;
 
 /* USER CODE END PV */
 
@@ -104,30 +106,9 @@ static float encoder_compute_rpm(uint16_t current_count,
   */
 static void motor_set_forward(uint16_t duty)
 {
-  HAL_GPIO_WritePin(DO_IN3_GPIO_Port, DO_IN3_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(DO_IN4_GPIO_Port, DO_IN4_Pin, GPIO_PIN_RESET);
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, duty);
-}
-
-/**
-  * @brief Set motor to reverse direction and apply PWM duty
-  * @param duty: PWM duty cycle (0 to 3199)
-  */
-static void motor_set_reverse(uint16_t duty)
-{
   HAL_GPIO_WritePin(DO_IN3_GPIO_Port, DO_IN3_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(DO_IN4_GPIO_Port, DO_IN4_Pin, GPIO_PIN_SET);
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, duty);
-}
-
-/**
-  * @brief Stop motor (coast): both direction pins low, duty = 0
-  */
-static void motor_stop(void)
-{
-  HAL_GPIO_WritePin(DO_IN3_GPIO_Port, DO_IN3_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(DO_IN4_GPIO_Port, DO_IN4_Pin, GPIO_PIN_RESET);
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0U);
 }
 
 /* USER CODE END 0 */
@@ -172,10 +153,7 @@ int main(void)
   HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
   __HAL_TIM_SET_COUNTER(&htim3, 0U);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-  motor_stop();
-  motor_demo_phase_start_tick = HAL_GetTick();
-  last_uart_publish_tick = motor_demo_phase_start_tick;
-  last_rpm_sample_tick = motor_demo_phase_start_tick;
+  /* Motor stays stopped — send 's' over UART to start the experiment */
 
   /* USER CODE END 2 */
 
@@ -188,73 +166,89 @@ int main(void)
     /* USER CODE BEGIN 3 */
     uint32_t current_tick = HAL_GetTick();
 
-    counter_value = __HAL_TIM_GET_COUNTER(&htim3);
-
-    if ((current_tick - last_uart_publish_tick) >= UART_PUBLISH_INTERVAL_MS)
+    /* Check for start command: send 's' over UART to begin the experiment */
+    if (!experiment_running &&
+        __HAL_UART_GET_FLAG(&huart2, UART_FLAG_RXNE))
     {
-      uint32_t sample_elapsed_ms = current_tick - last_rpm_sample_tick;
-
-      motor_rpm = encoder_compute_rpm(counter_value, past_counter_value, sample_elapsed_ms);
-
-      uint16_t raw_pwm = (uint16_t)__HAL_TIM_GET_COMPARE(&htim2, TIM_CHANNEL_2);
-
-      int8_t dir_sign = 0;
-      if (HAL_GPIO_ReadPin(DO_IN3_GPIO_Port, DO_IN3_Pin) == GPIO_PIN_SET)
+      uint8_t rx_byte = (uint8_t)(huart2.Instance->DR & 0xFFU);
+      if (rx_byte == 's')
       {
-        dir_sign = 1;
+        experiment_running = 1;
+        step_start_tick = current_tick;
+        last_uart_publish_tick = current_tick;
+        last_rpm_sample_tick = current_tick;
+        past_counter_value = __HAL_TIM_GET_COUNTER(&htim3);
+        motor_set_forward(MOTOR_PWM_DUTY_MIN);
       }
-      else if (HAL_GPIO_ReadPin(DO_IN4_GPIO_Port, DO_IN4_Pin) == GPIO_PIN_SET)
+    }
+
+    if (experiment_running)
+    {
+      counter_value = __HAL_TIM_GET_COUNTER(&htim3);
+
+      if ((current_tick - last_uart_publish_tick) >= UART_PUBLISH_INTERVAL_MS)
       {
-        dir_sign = -1;
+        uint32_t sample_elapsed_ms = current_tick - last_rpm_sample_tick;
+
+        motor_rpm = encoder_compute_rpm(counter_value, past_counter_value, sample_elapsed_ms);
+
+        uint16_t raw_pwm = (uint16_t)__HAL_TIM_GET_COMPARE(&htim2, TIM_CHANNEL_2);
+
+        int8_t dir_sign = 0;
+        if (HAL_GPIO_ReadPin(DO_IN4_GPIO_Port, DO_IN4_Pin) == GPIO_PIN_SET)
+        {
+          dir_sign = 1;
+        }
+        else if (HAL_GPIO_ReadPin(DO_IN3_GPIO_Port, DO_IN3_Pin) == GPIO_PIN_SET)
+        {
+          dir_sign = -1;
+        }
+
+        float pwm_norm = (dir_sign == 0) ? 0.0f
+                         : ((float)raw_pwm / (float)MOTOR_PWM_DUTY_MAX) * (float)dir_sign;
+
+        const char *norm_sign = (pwm_norm < 0.0f) ? "-" : "";
+        float norm_abs = (pwm_norm < 0.0f) ? -pwm_norm : pwm_norm;
+        uint32_t norm_int = (uint32_t)norm_abs;
+        uint32_t norm_frac = (uint32_t)((norm_abs - (float)norm_int) * 1000.0f);
+
+        int tx_len = snprintf(uart_buffer,
+                              sizeof(uart_buffer),
+                              "%d,%s%lu.%03lu\r\n",
+                              (int)motor_rpm,
+                              norm_sign,
+                              (unsigned long)norm_int,
+                              (unsigned long)norm_frac);
+
+        if (tx_len > 0)
+        {
+          HAL_UART_Transmit(&huart2, (uint8_t*)uart_buffer, (uint16_t)tx_len, 20);
+        }
+        last_uart_publish_tick = current_tick;
+        last_rpm_sample_tick = current_tick;
+        past_counter_value = counter_value;
       }
 
-      float pwm_norm = (dir_sign == 0) ? 0.0f
-                       : ((float)raw_pwm / (float)MOTOR_PWM_DUTY_MAX) * (float)dir_sign;
-
-      const char *norm_sign = (pwm_norm < 0.0f) ? "-" : "";
-      float norm_abs = (pwm_norm < 0.0f) ? -pwm_norm : pwm_norm;
-      uint32_t norm_int = (uint32_t)norm_abs;
-      uint32_t norm_frac = (uint32_t)((norm_abs - (float)norm_int) * 1000.0f);
-
-      int tx_len = snprintf(uart_buffer,
-                            sizeof(uart_buffer),
-                            "%d,%s%lu.%03lu\r\n",
-                            (int)motor_rpm,
-                            norm_sign,
-                            (unsigned long)norm_int,
-                            (unsigned long)norm_frac);
-
-      if (tx_len > 0)
+      /* Three-phase profile: 0% -> 100% -> stop -> end */
+      uint32_t phase_elapsed = current_tick - step_start_tick;
+      if (phase_elapsed < MOTOR_PHASE1_MS)
       {
-        HAL_UART_Transmit(&huart2, (uint8_t*)uart_buffer, (uint16_t)tx_len, 20);
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0U);
       }
-      last_uart_publish_tick = current_tick;
-      last_rpm_sample_tick = current_tick;
-      past_counter_value = counter_value;
-    }
-
-    /* Motor demo state machine: forward -> stop -> reverse -> stop cycle */
-    uint32_t phase_elapsed = current_tick - motor_demo_phase_start_tick;
-
-    if (phase_elapsed < MOTOR_FORWARD_TIME_MS)
-    {
-      motor_set_forward(MOTOR_PWM_DEMO_DUTY);
-    }
-    else if (phase_elapsed < (MOTOR_FORWARD_TIME_MS + MOTOR_STOP_TIME_MS))
-    {
-      motor_stop();
-    }
-    else if (phase_elapsed < (MOTOR_FORWARD_TIME_MS + MOTOR_STOP_TIME_MS + MOTOR_REVERSE_TIME_MS))
-    {
-      motor_set_reverse(MOTOR_PWM_DEMO_DUTY);
-    }
-    else if (phase_elapsed < (MOTOR_FORWARD_TIME_MS + MOTOR_STOP_TIME_MS + MOTOR_REVERSE_TIME_MS + MOTOR_STOP_TIME_MS))
-    {
-      motor_stop();
-    }
-    else
-    {
-      motor_demo_phase_start_tick = current_tick;
+      else if (phase_elapsed < (MOTOR_PHASE1_MS + MOTOR_PHASE2_MS))
+      {
+        motor_set_forward(MOTOR_PWM_100PCT);
+      }
+      else if (phase_elapsed < (MOTOR_PHASE1_MS + MOTOR_PHASE2_MS + MOTOR_PHASE3_MS))
+      {
+        HAL_GPIO_WritePin(DO_IN3_GPIO_Port, DO_IN3_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(DO_IN4_GPIO_Port, DO_IN4_Pin, GPIO_PIN_RESET);
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0U);
+      }
+      else
+      {
+        experiment_running = 0;
+      }
     }
 
   }
