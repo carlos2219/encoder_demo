@@ -24,8 +24,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
-#include <stdlib.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -42,12 +40,17 @@
 
 #define ENCODER_COUNTS_PER_REV 2048.0f
 #define UART_PUBLISH_INTERVAL_MS 20U
-#define PID_SAMPLE_TIME_S 0.02f
-#define MOTOR_TARGET_RPM 60.0f
 
 /* Motor control constants */
-#define MOTOR_PWM_DUTY_MIN 0U
-#define MOTOR_PWM_DUTY_MAX 3199U
+#define MOTOR_PWM_DUTY_MIN  0U
+#define MOTOR_PWM_DUTY_MAX  3199U
+
+/* PID tuning — adjust Kp/Ki/Kd to taste */
+#define PID_SAMPLE_TIME_S   0.020f
+#define PID_KP              8.0f // 8 works well for this motor/encoder, but feel free to experiment with the values!
+#define PID_KI               40.0f
+#define PID_KD               0.0f
+#define PID_TAU              0.020f
 
 /* USER CODE END PD */
 
@@ -66,9 +69,10 @@ UART_HandleTypeDef huart2;
 char uart_buffer[64];
 uint32_t last_uart_publish_tick = 0;
 
-/* Step response timing */
-static uint32_t step_start_tick = 0;
 static uint8_t experiment_running = 0;
+static float rpm_setpoint = 0.0f;
+static char rx_buf[8];
+static uint8_t rx_idx = 0;
 PIDController motor_pid;
 
 /* USER CODE END PV */
@@ -151,13 +155,21 @@ int main(void)
   uint16_t past_counter_value = 0;
   uint32_t last_rpm_sample_tick = 0;
   float motor_rpm = 0.0f;
-  float rpm_setpoint = MOTOR_TARGET_RPM;
-  float pid_output = 0.0f;
-  int32_t pwm_command = 0;
   HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
   __HAL_TIM_SET_COUNTER(&htim3, 0U);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-  /* Motor stays stopped — send 's' over UART to start the experiment */
+
+  motor_pid.Kp = PID_KP;
+  motor_pid.Ki = PID_KI;
+  motor_pid.Kd = PID_KD;
+  motor_pid.tau = PID_TAU;
+  motor_pid.T = PID_SAMPLE_TIME_S;
+  motor_pid.limMin = 0.0f;
+  motor_pid.limMax = (float)MOTOR_PWM_DUTY_MAX;
+  motor_pid.limMinInt = -(float)MOTOR_PWM_DUTY_MAX;
+  motor_pid.limMaxInt = (float)MOTOR_PWM_DUTY_MAX;
+  PID_Init(&motor_pid);
+  /* Send 's' to arm, then any integer RPM value (e.g. "120") to set the target */
 
   /* USER CODE END 2 */
 
@@ -170,19 +182,45 @@ int main(void)
     /* USER CODE BEGIN 3 */
     uint32_t current_tick = HAL_GetTick();
 
-    /* Check for start command: send 's' over UART to begin the experiment */
-    if (!experiment_running &&
-        __HAL_UART_GET_FLAG(&huart2, UART_FLAG_RXNE))
+    /* UART RX: buffer chars until newline, then parse command.
+     * 's'  — arm the experiment (motor off, setpoint = 0)
+     * '0'..'9' string — update RPM setpoint (e.g. "120\n")
+     */
+    if (__HAL_UART_GET_FLAG(&huart2, UART_FLAG_RXNE))
     {
       uint8_t rx_byte = (uint8_t)(huart2.Instance->DR & 0xFFU);
-      if (rx_byte == 's')
+      if (rx_byte == '\r' || rx_byte == '\n')
       {
-        experiment_running = 1;
-        step_start_tick = current_tick;
-        last_uart_publish_tick = current_tick;
-        last_rpm_sample_tick = current_tick;
-        past_counter_value = __HAL_TIM_GET_COUNTER(&htim3);
-        motor_set_forward(MOTOR_PWM_DUTY_MIN);
+        if (rx_idx > 0U)
+        {
+          rx_buf[rx_idx] = '\0';
+          if (rx_idx == 1U && rx_buf[0] == 's')
+          {
+            experiment_running = 1;
+            last_uart_publish_tick = current_tick;
+            last_rpm_sample_tick = current_tick;
+            past_counter_value = __HAL_TIM_GET_COUNTER(&htim3);
+            PID_Init(&motor_pid);
+            rpm_setpoint = 0.0f;
+          }
+          else
+          {
+            int32_t val = 0;
+            for (uint8_t i = 0U; i < rx_idx; i++)
+            {
+              if (rx_buf[i] >= '0' && rx_buf[i] <= '9')
+              {
+                val = val * 10 + (int32_t)(rx_buf[i] - '0');
+              }
+            }
+            rpm_setpoint = (float)val;
+          }
+          rx_idx = 0U;
+        }
+      }
+      else if (rx_idx < (uint8_t)(sizeof(rx_buf) - 1U))
+      {
+        rx_buf[rx_idx++] = (char)rx_byte;
       }
     }
 
@@ -218,8 +256,9 @@ int main(void)
 
         int tx_len = snprintf(uart_buffer,
                               sizeof(uart_buffer),
-                              "%d,%s%lu.%03lu\r\n",
+                              "%d,%d,%s%lu.%03lu\r\n",
                               (int)motor_rpm,
+                              (int)rpm_setpoint,
                               norm_sign,
                               (unsigned long)norm_int,
                               (unsigned long)norm_frac);
@@ -231,7 +270,23 @@ int main(void)
         last_uart_publish_tick = current_tick;
         last_rpm_sample_tick = current_tick;
         past_counter_value = counter_value;
+
+        /* PID velocity control */
+        float pid_out = PID_Compute(&motor_pid, rpm_setpoint, motor_rpm);
+        uint16_t pwm_command = (uint16_t)pid_out;
+
+        if (rpm_setpoint <= 0.0f)
+        {
+          HAL_GPIO_WritePin(DO_IN3_GPIO_Port, DO_IN3_Pin, GPIO_PIN_RESET);
+          HAL_GPIO_WritePin(DO_IN4_GPIO_Port, DO_IN4_Pin, GPIO_PIN_RESET);
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0U);
+        }
+        else
+        {
+          motor_set_forward(pwm_command);
+        }
       }
+    }
 
   }
   /* USER CODE END 3 */
