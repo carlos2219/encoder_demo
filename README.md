@@ -59,7 +59,7 @@ The motor was identified as a first-order system with normalized PWM input (`[-1
 
 $$G(s) = \frac{K_p}{1 + T_{p1} \cdot s} \qquad K_p = 131.15, \quad T_{p1} = 0.10094 \text{ s}$$
 
-This model was used to inform the PID gains. The firmware uses **raw PWM counts** as the controller output (range 0 – 3199), so the gains in the table below are scaled accordingly (see the note under the table).
+This model was used to tune the PI gains. The controller output is normalized to `[0, 1]`, which maps directly to the plant input used during identification. The firmware then scales to raw counts internally: `pwm_counts = u_norm × MOTOR_PWM_DUTY_MAX`.
 
 ### PID Tuning Constants
 
@@ -67,15 +67,15 @@ Declared near the top of `Core/Src/main.c`:
 
 | Constant | Default | Notes |
 |----------|---------|-------|
-| `PID_KP` | 8.0 | Proportional gain |
-| `PID_KI` | 40.0 | Integral gain |
-| `PID_KD` | 0.0 | Derivative gain |
+| `PID_KP` | 0.004 | Proportional gain (normalized output `[0, 1]`) |
+| `PID_KI` | 0.040 | Integral gain (normalized output `[0, 1]`) |
+| `PID_KD` | 0.000 | Derivative gain (normalized output `[0, 1]`) |
 | `PID_TAU` | 0.020 s | Derivative filter time constant |
 | `PID_SAMPLE_TIME_S` | 0.020 s | Controller sample period |
 | `UART_PUBLISH_INTERVAL_MS` | 20 ms | Telemetry publish period |
 | `ENCODER_COUNTS_PER_REV` | 2048 | Encoder PPR (quadrature counts) |
 
-> **Important:** The gains above are tuned for the **raw PWM output range (0 – 3199)**. If you redesign the controller with a normalized output in `[0, 1]`, scale the gains accordingly — for reference, the equivalent normalized values for this motor are approximately `Kp_norm ≈ 0.004` and `Ki_norm ≈ 0.040`. //KP = MOTOR_PWM_DUTY_MAX*Kp_norm, KI = MOTOR_PWM_DUTY_MAX*Ki_norm 
+> **Note:** Gains are tuned directly for the **normalized output `[0, 1]`**, consistent with the identified plant model. The firmware converts to raw counts before writing the timer register: `pwm_counts = u_norm × MOTOR_PWM_DUTY_MAX (3199)`.
 
 Main tunable constants are declared near the top of `Core/Src/main.c`.
 

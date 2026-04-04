@@ -45,13 +45,13 @@
 #define MOTOR_PWM_DUTY_MIN  0U
 #define MOTOR_PWM_DUTY_MAX  3199U
 
-/* PID tuning — adjust Kp/Ki/Kd to taste */
+/* PID tuning — gains are for normalized output [0, 1]; firmware scales to counts after compute
+ * Derived from identified plant: G(s) = 131.15 / (1 + 0.10094*s), input = normalized PWM */
 #define PID_SAMPLE_TIME_S   0.020f
-/* Gains are for raw PWM output (0 – 3199). Equivalent normalized [0,1] gains: Kp_norm≈0.004, Ki_norm≈0.040, Kd_norm≈0.000 */
-#define PID_KP              8.0f  //MOTOR_PWM_DUTY_MAX*kp_norm
-#define PID_KI              40.0f  //MOTOR_PWM_DUTY_MAX*ki_norm
-#define PID_KD              0.0f  //MOTOR_PWM_DUTY_MAX*kd_norm
-#define PID_TAU              0.020f
+#define PID_KP              0.004f
+#define PID_KI              0.040f
+#define PID_KD              0.000f
+#define PID_TAU             0.020f
 
 /* USER CODE END PD */
 
@@ -166,9 +166,9 @@ int main(void)
   motor_pid.tau = PID_TAU;
   motor_pid.T = PID_SAMPLE_TIME_S;
   motor_pid.limMin = 0.0f;
-  motor_pid.limMax = (float)MOTOR_PWM_DUTY_MAX;
-  motor_pid.limMinInt = -(float)MOTOR_PWM_DUTY_MAX;
-  motor_pid.limMaxInt = (float)MOTOR_PWM_DUTY_MAX;
+  motor_pid.limMax = 1.0f;
+  motor_pid.limMinInt = -1.0f;
+  motor_pid.limMaxInt = 1.0f;
   PID_Init(&motor_pid);
   /* Send 's' to arm, then any integer RPM value (e.g. "120") to set the target */
 
@@ -272,9 +272,9 @@ int main(void)
         last_rpm_sample_tick = current_tick;
         past_counter_value = counter_value;
 
-        /* PID velocity control */
-        float pid_out = PID_Compute(&motor_pid, rpm_setpoint, motor_rpm);
-        uint16_t pwm_command = (uint16_t)pid_out;
+        /* PID velocity control — compute normalized output then scale to timer counts */
+        float u_norm = PID_Compute(&motor_pid, rpm_setpoint, motor_rpm);
+        uint16_t pwm_command = (uint16_t)(u_norm * (float)MOTOR_PWM_DUTY_MAX);
 
         if (rpm_setpoint <= 0.0f)
         {
