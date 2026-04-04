@@ -42,7 +42,6 @@
 #define UART_PUBLISH_INTERVAL_MS 20U
 
 /* Motor control constants */
-#define MOTOR_PWM_DUTY_MIN  0U
 #define MOTOR_PWM_DUTY_MAX  3199U
 
 /* PID tuning — gains are for normalized output [0, 1]; firmware scales to counts after compute
@@ -165,7 +164,6 @@ int main(void)
   /* USER CODE BEGIN 2 */
   uint16_t counter_value = 0;
   uint16_t past_counter_value = 0;
-  uint32_t last_rpm_sample_tick = 0;
   float motor_rpm = 0.0f;
   HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
   __HAL_TIM_SET_COUNTER(&htim3, 0U);
@@ -211,7 +209,6 @@ int main(void)
           {
             experiment_running = 1;
             last_uart_publish_tick = current_tick;
-            last_rpm_sample_tick = current_tick;
             past_counter_value = __HAL_TIM_GET_COUNTER(&htim3);
             PID_Init(&motor_pid);
             rpm_setpoint = 0.0f;
@@ -250,50 +247,13 @@ int main(void)
 
       if ((current_tick - last_uart_publish_tick) >= UART_PUBLISH_INTERVAL_MS)
       {
-        uint32_t sample_elapsed_ms = current_tick - last_rpm_sample_tick;
+        uint32_t sample_elapsed_ms = current_tick - last_uart_publish_tick;
 
         motor_rpm = encoder_compute_rpm(counter_value, past_counter_value, sample_elapsed_ms);
 
-        uint16_t raw_pwm = (uint16_t)__HAL_TIM_GET_COMPARE(&htim2, TIM_CHANNEL_2);
-
-        int8_t dir_sign = 0;
-        if (HAL_GPIO_ReadPin(DO_IN4_GPIO_Port, DO_IN4_Pin) == GPIO_PIN_SET)
-        {
-          dir_sign = 1;
-        }
-        else if (HAL_GPIO_ReadPin(DO_IN3_GPIO_Port, DO_IN3_Pin) == GPIO_PIN_SET)
-        {
-          dir_sign = -1;
-        }
-
-        float pwm_norm = (dir_sign == 0) ? 0.0f
-                         : ((float)raw_pwm / (float)MOTOR_PWM_DUTY_MAX) * (float)dir_sign;
-
-        const char *norm_sign = (pwm_norm < 0.0f) ? "-" : "";
-        float norm_abs = (pwm_norm < 0.0f) ? -pwm_norm : pwm_norm;
-        uint32_t norm_int = (uint32_t)norm_abs;
-        uint32_t norm_frac = (uint32_t)((norm_abs - (float)norm_int) * 1000.0f);
-
-        int tx_len = snprintf(uart_buffer,
-                              sizeof(uart_buffer),
-                              "%d,%d,%s%lu.%03lu\r\n",
-                              (int)motor_rpm,
-                              (int)rpm_setpoint,
-                              norm_sign,
-                              (unsigned long)norm_int,
-                              (unsigned long)norm_frac);
-
-        if (tx_len > 0)
-        {
-          HAL_UART_Transmit(&huart2, (uint8_t*)uart_buffer, (uint16_t)tx_len, 20);
-        }
-        last_uart_publish_tick = current_tick;
-        last_rpm_sample_tick = current_tick;
-        past_counter_value = counter_value;
-
-        /* PID velocity control — compute normalized output then scale to timer counts */
+        /* PID velocity control — normalized output then scale to counts */
         float u_norm = PID_Compute(&motor_pid, rpm_setpoint, motor_rpm);
-        float u_abs = (u_norm < 0.0f) ? -u_norm : u_norm;
+        float u_abs  = (u_norm < 0.0f) ? -u_norm : u_norm;
         uint16_t pwm_command = (uint16_t)(u_abs * (float)MOTOR_PWM_DUTY_MAX);
 
         if (rpm_setpoint == 0.0f)
@@ -310,6 +270,27 @@ int main(void)
         {
           motor_set_reverse(pwm_command);
         }
+
+        /* Telemetry — log current-cycle command alongside current measurement */
+        const char *u_sign = (u_norm < 0.0f) ? "-" : "";
+        uint32_t u_int  = (uint32_t)u_abs;
+        uint32_t u_frac = (uint32_t)((u_abs - (float)u_int) * 1000.0f);
+
+        int tx_len = snprintf(uart_buffer,
+                              sizeof(uart_buffer),
+                              "%d,%d,%s%lu.%03lu\r\n",
+                              (int)motor_rpm,
+                              (int)rpm_setpoint,
+                              u_sign,
+                              (unsigned long)u_int,
+                              (unsigned long)u_frac);
+
+        if (tx_len > 0)
+        {
+          HAL_UART_Transmit(&huart2, (uint8_t*)uart_buffer, (uint16_t)tx_len, 20);
+        }
+        last_uart_publish_tick = current_tick;
+        past_counter_value = counter_value;
       }
     }
 

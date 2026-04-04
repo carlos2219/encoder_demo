@@ -39,9 +39,10 @@ Send commands over USART2 (newline-terminated):
 | Command | Effect |
 |---------|--------|
 | `s` | Arm the experiment — resets PID state, clears setpoint, starts telemetry |
-| `<integer>` | Set the RPM target (e.g. `120` sets 120 RPM forward) |
+| `<integer>` | Set forward RPM target (e.g. `120` → 120 RPM forward) |
+| `-<integer>` | Set reverse RPM target (e.g. `-120` → 120 RPM reverse) |
 
-**Note:** The motor only spins in the forward direction. A setpoint of `0` stops the motor.
+**Note:** A setpoint of `0` coasts the motor to a stop (both direction pins de-asserted).
 
 ### Telemetry
 
@@ -59,7 +60,7 @@ The motor was identified as a first-order system with normalized PWM input (`[-1
 
 $$G(s) = \frac{K_p}{1 + T_{p1} \cdot s} \qquad K_p = 131.15, \quad T_{p1} = 0.10094 \text{ s}$$
 
-This model was used to tune the PI gains. The controller output is normalized to `[0, 1]`, which maps directly to the plant input used during identification. The firmware then scales to raw counts internally: `pwm_counts = u_norm × MOTOR_PWM_DUTY_MAX`.
+This model was used to tune the PI gains. The controller output is normalized to `[-1, 1]`, which maps directly to the plant input used during identification. The firmware then scales to raw counts internally: `pwm_counts = |u_norm| × MOTOR_PWM_DUTY_MAX`, with sign determining direction.
 
 ### PID Tuning Constants
 
@@ -75,7 +76,7 @@ Declared near the top of `Core/Src/main.c`:
 | `UART_PUBLISH_INTERVAL_MS` | 20 ms | Telemetry publish period |
 | `ENCODER_COUNTS_PER_REV` | 2048 | Encoder PPR (quadrature counts) |
 
-> **Note:** Gains are tuned directly for the **normalized output `[0, 1]`**, consistent with the identified plant model. The firmware converts to raw counts before writing the timer register: `pwm_counts = u_norm × MOTOR_PWM_DUTY_MAX (3199)`.
+> **Note:** Gains are tuned directly for the **normalized output `[-1, 1]`**, consistent with the identified plant model. The firmware converts to raw counts before writing the timer register: `pwm_counts = |u_norm| × MOTOR_PWM_DUTY_MAX (3199)`.
 
 Main tunable constants are declared near the top of `Core/Src/main.c`.
 
@@ -167,42 +168,40 @@ Build outputs are generated under `build/Debug`.
 
 ## Telemetry
 
-CSV schema:
+CSV schema (one line every 20 ms, after `s` is sent):
 
 ```text
-time_ms,count,angle_deg,rpm
+measured_rpm,setpoint_rpm,pwm_norm
 ```
 
 Example:
 
 ```text
-237120,402,70.66,58.89
+118,-120,-0.374
 ```
 
 Fields:
 
-- `time_ms`: HAL tick (ms)
-- `count`: raw TIM3 counter
-- `angle_deg`: wrapped angle in degrees (0.00 to 359.99)
-- `rpm`: signed shaft speed in revolutions per minute
+- `measured_rpm`: shaft speed computed from encoder delta (RPM, signed)
+- `setpoint_rpm`: current RPM target commanded via UART
+- `pwm_norm`: normalized PI output applied this cycle, in `[-1.000, 1.000]`
 
 ## Quick Validation Checklist
 
-1. Verify motion sequence: forward -> stop -> reverse -> stop.
-2. Verify encoder `count` changes with motion and trend flips by direction.
-3. Verify `angle_deg` wraps near 359.99 -> 0.00.
-4. Verify LED blinks on movement and turns off after timeout.
+1. Send `s`, then `120` — motor should spin forward and `measured_rpm` should climb toward 120.
+2. Send `-120` — motor should reverse and `measured_rpm` should go negative.
+3. Send `0` — motor should coast to stop, `pwm_norm` should drop to `0.000`.
+4. Verify `measured_rpm` tracks `setpoint_rpm` in steady state (PI controller converging).
 
 ## Tuning Parameters
 
 Adjust in `Core/Src/main.c`:
 
-- `ENCODER_COUNTS_PER_REV`
-- `MOTOR_PWM_DEMO_DUTY`
-- `MOTOR_FORWARD_TIME_MS`
-- `MOTOR_STOP_TIME_MS`
-- `MOTOR_REVERSE_TIME_MS`
-- `UART_PUBLISH_INTERVAL_MS`
+- `PID_KP`, `PID_KI`, `PID_KD` — controller gains (normalized output `[-1, 1]`)
+- `PID_TAU` — derivative low-pass filter time constant
+- `PID_SAMPLE_TIME_S` — controller sample period (must match `UART_PUBLISH_INTERVAL_MS / 1000.0`)
+- `ENCODER_COUNTS_PER_REV` — quadrature counts per shaft revolution
+- `UART_PUBLISH_INTERVAL_MS` — telemetry and control loop period
 
 ## Troubleshooting
 
